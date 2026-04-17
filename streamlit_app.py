@@ -6,6 +6,19 @@ import altair as alt
 import plotly.graph_objects as go
 import plotly.express as px
 
+
+
+st.markdown("""
+<style>
+[data-testid="stSidebarNav"] {
+    display: none;
+}
+button[title="Settings"] {
+    display: none;
+}
+</style>
+""", unsafe_allow_html=True)
+
 ALL_TICKERS = [
     "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "NFLX", "INTC",
     "CSCO", "ADBE", "CRM", "QCOM", "AVGO", "TXN", "ORCL", "IBM", "MU", "AMAT",
