@@ -43,12 +43,13 @@ def clean_yf_download(symbol, period, interval):
 
 DEFAULT_CONFIG = {
     "epochs": 60,
+    "learning_rate": 0.001, 
     "require_positive_return": True,
     "buy_top_n": 5,
     "hold_top_n": 15,
     "min_prob": 0.52,
-    "classification_threshold": 0.58,
-    "buy_threshold": 0.52,
+    "classification_threshold": 0.6,
+    "buy_threshold": 0.6,
     "min_expected_return": 0.0,
     "max_positions": 15,
     "fee_per_trade": 0.001,
@@ -411,8 +412,13 @@ def run_experiment(config, progress_callback=None):
         outputs={"cls_out": cls_out, "ret_out": ret_out}
     )
 
+    learning_rate = config.get("learning_rate", 0.001)
+
+    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+        optimizer=optimizer,
+        # optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
         loss={
             "cls_out": tf.keras.losses.BinaryCrossentropy(from_logits=True),
             "ret_out": tf.keras.losses.MeanSquaredError(),

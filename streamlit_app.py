@@ -143,7 +143,7 @@ def header_with_help(title, help_text):
     </div>
     """, unsafe_allow_html=True)
 
-def slider_with_input(label, min_val, max_val, default, step, key, disabled=False, help=None):
+def slider_with_input(label, min_val, max_val, default, step, key, disabled=False, help=None, format=None):
     slider_key = f"{key}_slider"
     input_key = f"{key}_input"
 
@@ -577,7 +577,15 @@ with st.sidebar:
         help="More training can improve learning, but may take longer"
     )
 
-    
+    learning_rate = slider_with_input(
+        "Learning Rate",
+        1e-5, 1e-2,
+        float(DEFAULT_CONFIG.get("learning_rate", 0.001)),
+        1e-5,
+        key="learning_rate",
+        format="%.5f"
+    )
+
     lookback_years = st.slider(
         "Training Data Length (Years)" if simple_mode else "Lookback Years",
         1, 15, int(DEFAULT_CONFIG.get("lookback_years", 10)),
@@ -777,6 +785,7 @@ if st.session_state.get("pending_training_start", False):
 
     config = DEFAULT_CONFIG.copy()
     config["epochs"] = st.session_state["epochs"]
+    config["learning_rate"] = st.session_state["learning_rate"]
     config["buy_top_n"] = st.session_state["buy_top_n"]
     config["hold_top_n"] = st.session_state["hold_top_n"]
     config["min_prob"] = st.session_state["min_prob"]
@@ -920,6 +929,7 @@ if run_button:
 
         config = DEFAULT_CONFIG.copy()
         config["epochs"] = st.session_state["epochs"]
+        config["learning_rate"] = st.session_state["learning_rate"]
         config["buy_top_n"] = st.session_state["buy_top_n"]
         config["hold_top_n"] = st.session_state["hold_top_n"]
         config["min_prob"] = st.session_state["min_prob"]
