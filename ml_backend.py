@@ -527,7 +527,7 @@ def run_experiment(config, progress_callback=None):
     .rank(ascending=False, method="first")
     .astype(int)
     )
-
+    
     predictions_df = test_data.reset_index().copy()
 
     if "Date" in predictions_df.columns:
@@ -535,12 +535,10 @@ def run_experiment(config, progress_callback=None):
     elif "index" in predictions_df.columns:
         predictions_df = predictions_df.rename(columns={"index": "date"})
 
-    predictions_df = test_data.reset_index().copy()
-
     predictions_df = predictions_df[[
         "date", "Ticker", "Open", "High", "Low", "Close",
         "prob_up", "pred", "target", "future_return_1d",
-        "volatility_20"
+        "volatility_20", "predicted_return", "predicted_price", "rank"
     ]]
 
     latest_date = predictions_df["date"].max()
