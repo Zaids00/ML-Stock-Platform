@@ -183,6 +183,7 @@ def slider_with_input(label, min_val, max_val, default, step, key, disabled=Fals
             min_value=min_val,
             max_value=max_val,
             step=step,
+            format=format if format else None,
             key=input_key,
             disabled=disabled,
             label_visibility="collapsed",
@@ -578,12 +579,14 @@ with st.sidebar:
     )
 
     learning_rate = slider_with_input(
-        "Learning Rate",
+        "Learning Speed" if simple_mode else "Learning Rate",
         1e-5, 1e-2,
         float(DEFAULT_CONFIG.get("learning_rate", 0.001)),
         1e-5,
+        format="%.5f",
         key="learning_rate",
-        format="%.5f"
+        disabled=controls_locked,
+        help="Controls how fast the model learns"
     )
 
     lookback_years = st.slider(
