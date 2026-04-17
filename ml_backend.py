@@ -3,7 +3,61 @@ import pandas as pd
 import tensorflow as tf
 
 
+def clean_yf_download(symbol, period, interval):
+    df = yf.download(
+        symbol,
+        period=period,
+        interval=interval,
+        auto_adjust=False,
+        progress=False
+    )
+
+    if df.empty:
+        return df
+
+    # Flatten MultiIndex columns safely
+    if isinstance(df.columns, pd.MultiIndex):
+        try:
+            # Prefer selecting this symbol from the second level
+            if symbol in df.columns.get_level_values(-1):
+                df = df.xs(symbol, axis=1, level=-1)
+            else:
+                df.columns = df.columns.get_level_values(0)
+        except Exception:
+            df.columns = df.columns.get_level_values(0)
+
+    # If duplicate columns still exist, keep the first copy
+    df = df.loc[:, ~df.columns.duplicated()].copy()
+
+    # Ensure required OHLCV columns are plain Series
+    required_cols = ["Open", "High", "Low", "Close", "Volume"]
+    for col in required_cols:
+        if col not in df.columns:
+            raise ValueError(f"{symbol}: missing required column '{col}'")
+
+        # If somehow still duplicated / dataframe-like, collapse to first column
+        if isinstance(df[col], pd.DataFrame):
+            df[col] = df[col].iloc[:, 0]
+
+    return df
+
 DEFAULT_CONFIG = {
+    "epochs": 60,
+    "require_positive_return": True,
+    "buy_top_n": 5,
+    "hold_top_n": 15,
+    "min_prob": 0.52,
+    "classification_threshold": 0.58,
+    "buy_threshold": 0.52,
+    "min_expected_return": 0.0,
+    "max_positions": 15,
+    "fee_per_trade": 0.001,
+    "initial_capital": 1000,
+    "lookback_years": 10,
+    "period": "10y",
+    "interval": "1d",
+    "batch_size": 64,
+    "learning_rate": 0.001,
     "tickers": [
         "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META",
         "TSLA", "AMD", "NFLX", "INTC", "CSCO", "ADBE",
@@ -14,36 +68,40 @@ DEFAULT_CONFIG = {
         "KO", "PEP", "WMT", "COST", "MCD",
         "DIS", "NKE", "SBUX",
         "CAT", "BA", "GE", "HON"
-    ],
-    "period": "10y",
-    "interval": "1d",
-    "epochs": 60,
-    "batch_size": 64,
-    "learning_rate": 0.001,
-    "classification_threshold": 0.58,
-    "buy_top_n": 10,
-    "hold_top_n": 15,
-    "max_positions": 10,
-    "fee_per_trade": 0.001,
-    "min_prob": 0.52,
-    "initial_capital": 1000.0,
+    ]
 }
+
+class StreamlitProgressCallback(tf.keras.callbacks.Callback):
+    def __init__(self, progress_callback=None):
+        super().__init__()
+        self.progress_callback = progress_callback
+
+    def on_epoch_end(self, epoch, logs=None):
+        if self.progress_callback is not None:
+            self.progress_callback(epoch + 1, self.params["epochs"])
 
 
 def run_experiment(config, progress_callback=None):
     tickers = config["tickers"]
-    period = config["period"]
+    lookback_years = config.get("lookback_years", 10)
+    period = f"{lookback_years}y"
     interval = config["interval"]
     epochs = config["epochs"]
     batch_size = config["batch_size"]
     learning_rate = config["learning_rate"]
     classification_threshold = config["classification_threshold"]
+    min_expected_return = config.get("min_expected_return", 0.0)
     buy_top_n = config["buy_top_n"]
     hold_top_n = config["hold_top_n"]
     max_positions = config["max_positions"]
     fee_per_trade = config["fee_per_trade"]
     min_prob = config["min_prob"]
     initial_capital = config["initial_capital"]
+    ETF_LIST = ["SPY", "QQQ", "DIA", "IWM", "XLK", "XLF", "XLE", "XLV", "XLY", "XLI"]
+    asset_universe_mode = config.get("asset_universe_mode", "Stocks + ETFs")
+
+    if asset_universe_mode == "Stocks Only":
+        tickers = [t for t in tickers if t not in ETF_LIST]
 
     # tickers = [
     #     "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META",
@@ -59,10 +117,11 @@ def run_experiment(config, progress_callback=None):
 
     all_data = []
 
-    spy = yf.download("SPY", period=period, interval=interval, auto_adjust=False)
+    # spy = yf.download("SPY", period=period, interval=interval, auto_adjust=False)
 
-    if isinstance(spy.columns, pd.MultiIndex):
-        spy.columns = spy.columns.get_level_values(0)
+    # if isinstance(spy.columns, pd.MultiIndex):
+    #     spy.columns = spy.columns.get_level_values(0)
+    spy = clean_yf_download("SPY", period, interval)
 
     spy["spy_return_1d"] = spy["Close"].pct_change(1)
     spy["spy_return_3d"] = spy["Close"].pct_change(3)
@@ -73,9 +132,10 @@ def run_experiment(config, progress_callback=None):
     sector_data = {}
 
     for etf in sector_etfs:
-        etf_df = yf.download(etf, period=period, interval=interval, auto_adjust=False)
-        if isinstance(etf_df.columns, pd.MultiIndex):
-            etf_df.columns = etf_df.columns.get_level_values(0)
+        # etf_df = yf.download(etf, period=period, interval=interval, auto_adjust=False)
+        # if isinstance(etf_df.columns, pd.MultiIndex):
+        #     etf_df.columns = etf_df.columns.get_level_values(0)
+        etf_df = clean_yf_download(etf, period, interval)
 
         etf_df[f"{etf}_return_1d"] = etf_df["Close"].pct_change(1)
         etf_df[f"{etf}_return_3d"] = etf_df["Close"].pct_change(3)
@@ -83,10 +143,11 @@ def run_experiment(config, progress_callback=None):
         sector_data[etf] = etf_df[[f"{etf}_return_1d", f"{etf}_return_3d"]]
 
     for ticker in tickers:
-        data = yf.download(ticker, period=period, interval=interval, auto_adjust=False)
+        # data = yf.download(ticker, period=period, interval=interval, auto_adjust=False)
 
-        if isinstance(data.columns, pd.MultiIndex): 
-            data.columns = data.columns.get_level_values(0)
+        # if isinstance(data.columns, pd.MultiIndex): 
+        #     data.columns = data.columns.get_level_values(0)
+        data = clean_yf_download(ticker, period, interval)
         data["Ticker"] = ticker
 
         data = data.merge(spy, left_index=True, right_index=True, how="left")
@@ -101,6 +162,7 @@ def run_experiment(config, progress_callback=None):
         future_return_1d = data["Close"].shift(-1) / data["Close"] - 1
         data["target"] = (future_return_1d > 0).astype(int)
         data["future_return_1d"] = future_return_1d
+        data["target_return"] = future_return_1d
 
         # ----------------------------
         # 3. Feature engineering
@@ -276,11 +338,18 @@ def run_experiment(config, progress_callback=None):
     train_data = pd.concat(train_parts)
     test_data = pd.concat(test_parts)
 
+    # X_train_df = train_data[feature_cols].copy()
+    # y_train_df = train_data["target"].copy()
+
+    # X_test_df = test_data[feature_cols].copy()
+    # y_test_df = test_data["target"].copy()
     X_train_df = train_data[feature_cols].copy()
-    y_train_df = train_data["target"].copy()
+    y_train_cls_df = train_data["target"].copy()
+    y_train_ret_df = train_data["target_return"].copy()
 
     X_test_df = test_data[feature_cols].copy()
-    y_test_df = test_data["target"].copy()
+    y_test_cls_df = test_data["target"].copy()
+    y_test_ret_df = test_data["target_return"].copy()
 
     print("Train rows:", len(X_train_df))
     print("Test rows:", len(X_test_df))
@@ -297,11 +366,18 @@ def run_experiment(config, progress_callback=None):
     X_train_df = X_train_df.fillna(0)
     X_test_df = X_test_df.fillna(0)
 
+    # X_train = tf.convert_to_tensor(X_train_df.values, dtype=tf.float32)
+    # y_train = tf.convert_to_tensor(y_train_df.values, dtype=tf.float32)
+
+    # X_test = tf.convert_to_tensor(X_test_df.values, dtype=tf.float32)
+    # y_test = tf.convert_to_tensor(y_test_df.values, dtype=tf.float32)
     X_train = tf.convert_to_tensor(X_train_df.values, dtype=tf.float32)
-    y_train = tf.convert_to_tensor(y_train_df.values, dtype=tf.float32)
+    y_train_cls = tf.convert_to_tensor(y_train_cls_df.values, dtype=tf.float32)
+    y_train_ret = tf.convert_to_tensor(y_train_ret_df.values, dtype=tf.float32)
 
     X_test = tf.convert_to_tensor(X_test_df.values, dtype=tf.float32)
-    y_test = tf.convert_to_tensor(y_test_df.values, dtype=tf.float32)
+    y_test_cls = tf.convert_to_tensor(y_test_cls_df.values, dtype=tf.float32)
+    y_test_ret = tf.convert_to_tensor(y_test_ret_df.values, dtype=tf.float32)
 
     print("X_train shape:", X_train.shape)
     print("X_test shape:", X_test.shape)
@@ -309,104 +385,113 @@ def run_experiment(config, progress_callback=None):
     # ----------------------------
     # 7. Baseline accuracy
     # ----------------------------
-    baseline_class = 1.0 if float(tf.reduce_mean(y_train).numpy()) >= 0.5 else 0.0
+    # ----------------------------
+    # 7. Baseline accuracy
+    # ----------------------------
+    baseline_class = 1.0 if float(tf.reduce_mean(y_train_cls).numpy()) >= 0.5 else 0.0
     baseline_acc = tf.reduce_mean(
-        tf.cast(tf.equal(y_test, baseline_class), tf.float32)
+        tf.cast(tf.equal(y_test_cls, baseline_class), tf.float32)
     )
 
     print("\nBaseline test accuracy:", baseline_acc.numpy())
 
     # ----------------------------
-    # 8. Training dataset
-    # ----------------------------
-    # batch_size = 64
-    train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train))
-    train_dataset = train_dataset.shuffle(buffer_size=X_train.shape[0]).batch(batch_size)
-
-    # ----------------------------
     # 9. Model
     # ----------------------------
-    model = tf.keras.Sequential([
-        tf.keras.layers.Dense(64, activation="relu"),
-        tf.keras.layers.Dropout(0.3),
-        tf.keras.layers.Dense(32, activation="relu"),
-        tf.keras.layers.Dense(1)
-    ])
+    inputs = tf.keras.Input(shape=(X_train.shape[1],), name="features")
+    x = tf.keras.layers.Dense(64, activation="relu")(inputs)
+    x = tf.keras.layers.Dropout(0.3)(x)
+    x = tf.keras.layers.Dense(32, activation="relu")(x)
 
+    cls_out = tf.keras.layers.Dense(1, name="cls_out")(x)
+    ret_out = tf.keras.layers.Dense(1, name="ret_out")(x)
 
+    model = tf.keras.Model(
+        inputs=inputs,
+        outputs={"cls_out": cls_out, "ret_out": ret_out}
+    )
 
-    # loss_fn = tf.keras.losses.BinaryCrossentropy(from_logits=True)
-    # optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+        loss={
+            "cls_out": tf.keras.losses.BinaryCrossentropy(from_logits=True),
+            "ret_out": tf.keras.losses.MeanSquaredError(),
+        },
+        loss_weights={
+            "cls_out": 1.0,
+            "ret_out": 0.5,
+        },
+        metrics={
+            "cls_out": ["accuracy"],
+            "ret_out": [tf.keras.metrics.MeanSquaredError()],
+        }
+    )
 
-    # # epochs = 60
-    loss_fn = tf.keras.losses.BinaryCrossentropy(from_logits=True)
-    optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
+    progress_cb = StreamlitProgressCallback(progress_callback)
+
+    history = model.fit(
+        X_train,
+        {"cls_out": y_train_cls, "ret_out": y_train_ret},
+        epochs=epochs,
+        batch_size=batch_size,
+        verbose=0,
+        callbacks=[progress_cb]
+    )
 
     training_history = []
-
-
-
-
     for epoch in range(epochs):
-        for x_batch, y_batch in train_dataset:
-            with tf.GradientTape() as tape:
-                logits = model(x_batch, training=True)
-                loss = loss_fn(y_batch, tf.squeeze(logits))
-
-            grads = tape.gradient(loss, model.trainable_variables)
-            optimizer.apply_gradients(zip(grads, model.trainable_variables))
-
-        train_logits = model(X_train, training=False)
-        train_probs = tf.sigmoid(tf.squeeze(train_logits))
-        train_preds = tf.cast(train_probs > 0.5, tf.float32)
-        train_acc = tf.reduce_mean(tf.cast(tf.equal(train_preds, y_train), tf.float32))
-
-        if progress_callback is not None:
-            progress_callback(epoch + 1, epochs)
-        # if epoch % 5 == 0 or epoch == epochs - 1:
-        #     print(f"Epoch {epoch}: Loss = {loss.numpy():.6f}, Train Accuracy = {train_acc.numpy():.4f}")
         training_history.append({
             "epoch": epoch + 1,
-            "loss": float(loss.numpy()),
-            "train_accuracy": float(train_acc.numpy())
+            "loss": float(history.history["loss"][epoch]),
+            "train_accuracy": float(history.history["cls_out_accuracy"][epoch])
         })
 
         if epoch % 5 == 0 or epoch == epochs - 1:
-            print(f"Epoch {epoch}: Loss = {loss.numpy():.6f}, Train Accuracy = {train_acc.numpy():.4f}")
+            print(
+                f"Epoch {epoch}: "
+                f"Loss = {history.history['loss'][epoch]:.6f}, "
+                f"Train Accuracy = {history.history['cls_out_accuracy'][epoch]:.4f}"
+            )
 
 
 
     # ----------------------------
     # 10. Test evaluation
     # ----------------------------
-    test_logits = model(X_test, training=False)
-    test_probs = tf.sigmoid(tf.squeeze(test_logits))
+    # ----------------------------
+    # 10. Test evaluation
+    # ----------------------------
+    preds = model.predict(X_test, verbose=0)
 
-    test_data = test_data.copy()
-    test_data["prob_up"] = test_probs.numpy()
+    test_logits = tf.squeeze(preds["cls_out"])
+    predicted_return = tf.squeeze(preds["ret_out"]).numpy()
 
-    # Tuneable classification threshold
-    # classification_threshold = 0.58
+    test_probs = tf.sigmoid(test_logits)
     test_preds = tf.cast(test_probs > classification_threshold, tf.float32)
 
-    test_acc = tf.reduce_mean(tf.cast(tf.equal(test_preds, y_test), tf.float32))
+    test_acc = tf.reduce_mean(tf.cast(tf.equal(test_preds, y_test_cls), tf.float32))
 
     print("\nTest Accuracy:", test_acc.numpy())
 
     print("\nFirst 10 test probabilities:")
     print(test_probs[:10].numpy())
 
+    print("\nFirst 10 predicted returns:")
+    print(predicted_return[:10])
+
     print("\nFirst 10 predictions vs actual:")
     for i in range(10):
         print(
             "Prob Up:", float(test_probs[i].numpy()),
             "Pred:", int(test_preds[i].numpy()),
-            "Actual:", int(y_test[i].numpy())
+            "Actual:", int(y_test_cls[i].numpy()),
+            "Pred Return:", float(predicted_return[i]),
+            "Actual Return:", float(y_test_ret[i].numpy())
         )
 
     print("\nMean predicted probability:", float(tf.reduce_mean(test_probs).numpy()))
     print("Fraction predicted UP:", float(tf.reduce_mean(tf.cast(test_preds, tf.float32)).numpy()))
-    print("Actual fraction UP:", float(tf.reduce_mean(y_test).numpy()))
+    print("Actual fraction UP:", float(tf.reduce_mean(y_test_cls).numpy()))
 
     # ----------------------------
     # Portfolio backtest: long only, with sell/rotation
@@ -426,8 +511,16 @@ def run_experiment(config, progress_callback=None):
 
     test_data = test_data.copy()
     test_data["prob_up"] = test_probs.numpy()
+    test_data["predicted_return"] = predicted_return
+    test_data["predicted_price"] = test_data["Close"] * (1 + test_data["predicted_return"])
 
     test_data["pred"] = (test_data["prob_up"] > classification_threshold).astype(int)
+
+    test_data["rank"] = (
+    test_data.groupby(test_data.index)["prob_up"]
+    .rank(ascending=False, method="first")
+    .astype(int)
+    )
 
     predictions_df = test_data.reset_index().copy()
 
@@ -436,10 +529,13 @@ def run_experiment(config, progress_callback=None):
     elif "index" in predictions_df.columns:
         predictions_df = predictions_df.rename(columns={"index": "date"})
 
+    predictions_df = test_data.reset_index().copy()
+
     predictions_df = predictions_df[[
         "date", "Ticker", "Open", "High", "Low", "Close",
-        "prob_up", "pred", "target", "future_return_1d"
-    ]].copy()
+        "prob_up", "pred", "target", "future_return_1d",
+        "volatility_20"
+    ]]
 
     latest_date = predictions_df["date"].max()
 
@@ -474,7 +570,22 @@ def run_experiment(config, progress_callback=None):
         if isinstance(day_data, pd.Series):
             day_data = day_data.to_frame().T
             
-        day_data = day_data.sort_values("prob_up", ascending=False).copy()
+        ranking_method = config.get("ranking_method", "probability")
+
+        if ranking_method == "probability":
+            day_data = day_data.sort_values("prob_up", ascending=False)
+
+        elif ranking_method == "return":
+            day_data = day_data.sort_values("predicted_return", ascending=False)
+
+        elif ranking_method == "combined":
+            day_data["combined_score"] = (
+                0.6 * day_data["prob_up"] +
+                0.4 * day_data["predicted_return"]
+            )
+            day_data = day_data.sort_values("combined_score", ascending=False)
+
+        day_data = day_data.copy()
         day_data["rank"] = range(1, len(day_data) + 1)  
 
         # 1. Update existing holdings using today's realized 3-day return proxy
@@ -511,8 +622,11 @@ def run_experiment(config, progress_callback=None):
             rank = int(row["rank"].iloc[0])
 
             if rank > hold_top_n:
+                entry_value = portfolio[ticker]["entry_value"]
                 sell_value = portfolio[ticker]["value"] * (1 - fee_per_trade)
+                profit = sell_value - entry_value
                 capital += sell_value
+                profit_pct = ((profit / entry_value) * 100) if entry_value != 0 else 0
 
                 trade_log.append({
                     "date": current_date,
@@ -520,7 +634,9 @@ def run_experiment(config, progress_callback=None):
                     "action": "SELL",
                     "rank": rank,
                     "prob_up": prob_up,
-                    "value": sell_value
+                    "value": sell_value,
+                    "profit": profit,
+                    "profit_pct": profit_pct
                 })
 
                 tickers_to_remove.append(ticker)
@@ -532,10 +648,19 @@ def run_experiment(config, progress_callback=None):
         # candidates = day_data.sort_values("prob_up", ascending=False).copy()
         # candidates = candidates[candidates["prob_up"] > buy_threshold]
         # candidates = day_data.head(buy_top_n).copy()
+        if config.get("require_positive_return", True):
+            return_filter = day_data["predicted_return"] > 0
+            return_filter = day_data["predicted_return"] > min_expected_return
+            
+        else:
+            return_filter = day_data["predicted_return"] > min_expected_return
+
         candidates = day_data[
             (~day_data["Ticker"].isin(portfolio.keys())) &
-            (day_data["prob_up"] > min_prob)
-        ].head(buy_top_n)
+            (day_data["prob_up"] > min_prob) &
+            return_filter
+        ]
+
 
         # 3. Buy until portfolio is full
         available_slots = max_positions - len(portfolio)
@@ -574,7 +699,10 @@ def run_experiment(config, progress_callback=None):
 
                     if invested_amount > 0 and capital >= allocation_per_position:
                         capital -= allocation_per_position
-                        portfolio[ticker] = {"value": invested_amount}
+                        portfolio[ticker] = {
+                            "value": invested_amount,
+                            "entry_value": invested_amount
+                        }
 
                         trade_log.append({
                             "date": current_date,
@@ -582,9 +710,10 @@ def run_experiment(config, progress_callback=None):
                             "action": "BUY",
                             "rank": rank,
                             "prob_up": prob_up,
-                            "value": invested_amount
+                            "value": invested_amount,
+                            "profit": None,
+                            "profit_pct": None
                         })
-
         # 4. Compute total equity = cash + holdings
         holdings_value = sum(pos["value"] for pos in portfolio.values())
         total_equity = capital + holdings_value
@@ -610,10 +739,11 @@ def run_experiment(config, progress_callback=None):
     final_portfolio_value = float(portfolio_history_df["total_equity"].iloc[-1])
     print("\nFinal portfolio value:", final_portfolio_value)
 
-    spy_for_benchmark = yf.download("SPY", period=period, interval=interval, auto_adjust=False)
+    # spy_for_benchmark = yf.download("SPY", period=period, interval=interval, auto_adjust=False)
 
-    if isinstance(spy_for_benchmark.columns, pd.MultiIndex):
-        spy_for_benchmark.columns = spy_for_benchmark.columns.get_level_values(0)
+    # if isinstance(spy_for_benchmark.columns, pd.MultiIndex):
+    #     spy_for_benchmark.columns = spy_for_benchmark.columns.get_level_values(0)
+    spy_for_benchmark = clean_yf_download("SPY", period, interval)
 
     spy_for_benchmark = spy_for_benchmark.loc[portfolio_history_df["date"].min():portfolio_history_df["date"].max()].copy()
     spy_for_benchmark["spy_return"] = spy_for_benchmark["Close"].pct_change().fillna(0)
@@ -640,17 +770,43 @@ def run_experiment(config, progress_callback=None):
     # 12. Accuracy on traded signals only
     # ----------------------------
 
-    weights = model.layers[0].get_weights()[0]  # shape: (num_features, hidden_units)
+    weights = model.layers[1].get_weights()[0]  # first Dense layer weights  # shape: (num_features, hidden_units)
     importance = abs(weights).mean(axis=1)
 
     feature_importance_df = pd.DataFrame({
         "feature": feature_cols,
         "importance": importance
     }).sort_values("importance", ascending=False)
+    
+    feature_importance_df = feature_importance_df.sort_values("importance", ascending=False)
+    feature_importance_df.insert(0, "Rank", range(1, len(feature_importance_df) + 1))
+    
     training_history_df = pd.DataFrame(training_history)
     print(feature_importance_df.head(30))  
     total_return = (final_portfolio_value / initial_capital) - 1
+    holdings_rows = []
+    for ticker, pos in portfolio.items():
+        latest_row = test_data[test_data["Ticker"] == ticker].sort_index().tail(1)
 
+        if len(latest_row) > 0:
+            latest_prob = float(latest_row["prob_up"].iloc[0])
+            latest_close = float(latest_row["Close"].iloc[0])
+            latest_rank = int(latest_row["rank"].iloc[0]) if "rank" in latest_row.columns else None
+        else:
+            latest_prob = None
+            latest_close = None
+            latest_rank = None
+
+        holdings_rows.append({
+            "Ticker": ticker,
+            "position_value": float(pos["value"]),
+            "latest_close": latest_close,
+            "latest_prob_up": latest_prob,
+            "latest_rank": latest_rank,
+            "portfolio_weight": float(pos["value"] / final_portfolio_value) if final_portfolio_value > 0 else 0.0
+        })
+
+    holdings_df = pd.DataFrame(holdings_rows).sort_values("position_value", ascending=False)
     metrics = {
         "baseline_test_accuracy": float(baseline_acc.numpy()),
         "test_accuracy": float(test_acc.numpy()),
@@ -661,7 +817,7 @@ def run_experiment(config, progress_callback=None):
         "open_positions_end": int(len(portfolio)),
         "mean_predicted_probability": float(tf.reduce_mean(test_probs).numpy()),
         "fraction_predicted_up": float(tf.reduce_mean(tf.cast(test_preds, tf.float32)).numpy()),
-        "actual_fraction_up": float(tf.reduce_mean(y_test).numpy()),
+        "actual_fraction_up": float(tf.reduce_mean(y_test_cls).numpy()),
         "total_return": total_return,
     }
 
@@ -679,6 +835,7 @@ def run_experiment(config, progress_callback=None):
         "feature_importance_df": feature_importance_df,
         "spy_benchmark_df": spy_benchmark_df,
         "training_history_df": training_history_df,
+        "holdings_df": holdings_df,
     }
 
 if __name__ == "__main__":

@@ -1,0 +1,13 @@
+{
+  "baseline_test_accuracy": 0.5237356424331665,
+  "test_accuracy": 0.4772341549396515,
+  "final_portfolio_value": 1870.3342102351558,
+  "max_drawdown": 0.09524026145802383,
+  "num_buy_trades": 349,
+  "num_sell_trades": 345,
+  "open_positions_end": 4,
+  "mean_predicted_probability": 0.5044659376144409,
+  "fraction_predicted_up": 0.0652669370174408,
+  "actual_fraction_up": 0.5237356424331665,
+  "total_return": 0.8703342102351557
+}
