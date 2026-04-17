@@ -22,7 +22,7 @@ button[title="Settings"] {
 ALL_TICKERS = [
     "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "AMD", "NFLX", "INTC",
     "CSCO", "ADBE", "CRM", "QCOM", "AVGO", "TXN", "ORCL", "IBM", "MU", "AMAT",
-    "LRCX", "KLAC", "PANW", "SNOW", "PLTR", "UBER", "SHOP", "SQ", "PYPL", "INTU",
+    "LRCX", "KLAC", "PANW", "SNOW", "PLTR", "UBER", "SHOP", "XYZ", "PYPL", "INTU",
 
     "JPM", "BAC", "WFC", "GS", "MS", "C", "AXP", "BLK", "SCHW", "KKR",
 
