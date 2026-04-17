@@ -318,7 +318,7 @@ def apply_pending_config():
                 st.session_state[input_key] = st.session_state[key]
 
 st.set_page_config(page_title="ML Stock Dashboard", layout="wide")
-st.title("ML-Driven Stock Selection & Backtesting Platform")
+st.title("AI-Driven Trading Experimentation Engine")
 
 if "results" not in st.session_state:
     st.session_state["results"] = None
