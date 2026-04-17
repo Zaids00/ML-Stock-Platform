@@ -1141,6 +1141,9 @@ if results is not None:
             key="top_pick_metric"
         )
 
+        if top_pick_metric == "Rank":
+            st.caption("Lower rank is better (Rank 1 = strongest pick).")
+
         metric_titles = {
             "Buy Score": "AI Buy Score",
             "Predicted Return %": "Predicted Return (%)",
@@ -1154,7 +1157,11 @@ if results is not None:
             alt.Chart(top_picks_chart_df)
             .mark_bar(cornerRadiusEnd=8)
             .encode(
-                y=alt.Y("label:N", sort="-x", title=None),
+                y=alt.Y(
+                    "label:N",
+                    sort=("-x" if top_pick_metric != "Rank" else "x"),
+                    title=None
+                ),
                 x=alt.X(f"{top_pick_metric}:Q", title=metric_titles[top_pick_metric]),
                 color=alt.Color(
                     "label:N",
@@ -1355,7 +1362,7 @@ if results is not None:
         st.dataframe(styled_trades, use_container_width=True, hide_index=True)
 
         with st.expander("More details"):
-            st.dataframe(paper_trades_df.tail(100), use_container_width=True)
+            st.dataframe(paper_trades_df.head(100), use_container_width=True)
 
     with tab3:
         st.subheader("Portfolio")
@@ -1569,7 +1576,7 @@ if results is not None:
         })
 
         styled_actions = (
-            recent_actions_display.tail(10)
+            recent_actions_display.head(10)
             .style
             .map(highlight_action, subset=["Action"])
             .map(highlight_profit, subset=["P/L"])
@@ -1639,7 +1646,7 @@ if results is not None:
 
         st.markdown("### Portfolio History")
 
-        portfolio_history_display = portfolio_history_df.tail(30).copy()
+        portfolio_history_display = portfolio_history_df.head(30).copy()
 
         # remove drawdown column if it exists
         if "drawdown" in portfolio_history_display.columns:
