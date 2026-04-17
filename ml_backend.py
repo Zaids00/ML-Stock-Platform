@@ -3,6 +3,19 @@ import pandas as pd
 import tensorflow as tf
 
 
+def flatten_columns(df):
+    df = df.copy()
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [
+            "_".join([str(x) for x in col if str(x) != ""]).strip("_")
+            if isinstance(col, tuple) else str(col)
+            for col in df.columns
+        ]
+
+    df = df.loc[:, ~pd.Index(df.columns).duplicated()].copy()
+    return df
+
 def clean_yf_download(symbol, period, interval):
     df = yf.download(
         symbol,
@@ -15,10 +28,10 @@ def clean_yf_download(symbol, period, interval):
     if df.empty:
         return df
 
-    # Flatten MultiIndex columns safely
+    df = df.copy()
+
     if isinstance(df.columns, pd.MultiIndex):
         try:
-            # Prefer selecting this symbol from the second level
             if symbol in df.columns.get_level_values(-1):
                 df = df.xs(symbol, axis=1, level=-1)
             else:
@@ -26,16 +39,13 @@ def clean_yf_download(symbol, period, interval):
         except Exception:
             df.columns = df.columns.get_level_values(0)
 
-    # If duplicate columns still exist, keep the first copy
-    df = df.loc[:, ~df.columns.duplicated()].copy()
+    df = flatten_columns(df)
 
-    # Ensure required OHLCV columns are plain Series
     required_cols = ["Open", "High", "Low", "Close", "Volume"]
     for col in required_cols:
         if col not in df.columns:
             raise ValueError(f"{symbol}: missing required column '{col}'")
 
-        # If somehow still duplicated / dataframe-like, collapse to first column
         if isinstance(df[col], pd.DataFrame):
             df[col] = df[col].iloc[:, 0]
 
@@ -123,25 +133,26 @@ def run_experiment(config, progress_callback=None):
     # if isinstance(spy.columns, pd.MultiIndex):
     #     spy.columns = spy.columns.get_level_values(0)
     spy = clean_yf_download("SPY", period, interval)
+    spy = flatten_columns(spy)
 
     spy["spy_return_1d"] = spy["Close"].pct_change(1)
     spy["spy_return_3d"] = spy["Close"].pct_change(3)
-    spy = spy[["spy_return_1d", "spy_return_3d"]]
+    spy = flatten_columns(spy[["spy_return_1d", "spy_return_3d"]])
 
     sector_etfs = ["XLK", "XLF", "XLE", "XLV", "XLY", "XLI"]
 
     sector_data = {}
 
     for etf in sector_etfs:
-        # etf_df = yf.download(etf, period=period, interval=interval, auto_adjust=False)
-        # if isinstance(etf_df.columns, pd.MultiIndex):
-        #     etf_df.columns = etf_df.columns.get_level_values(0)
         etf_df = clean_yf_download(etf, period, interval)
+        etf_df = flatten_columns(etf_df)
 
         etf_df[f"{etf}_return_1d"] = etf_df["Close"].pct_change(1)
         etf_df[f"{etf}_return_3d"] = etf_df["Close"].pct_change(3)
 
-        sector_data[etf] = etf_df[[f"{etf}_return_1d", f"{etf}_return_3d"]]
+        sector_data[etf] = flatten_columns(
+            etf_df[[f"{etf}_return_1d", f"{etf}_return_3d"]]
+        )
 
     for ticker in tickers:
         # data = yf.download(ticker, period=period, interval=interval, auto_adjust=False)
@@ -149,12 +160,16 @@ def run_experiment(config, progress_callback=None):
         # if isinstance(data.columns, pd.MultiIndex): 
         #     data.columns = data.columns.get_level_values(0)
         data = clean_yf_download(ticker, period, interval)
+        data = flatten_columns(data)
         data["Ticker"] = ticker
 
-        data = data.merge(spy, left_index=True, right_index=True, how="left")
+        data = flatten_columns(data)
+        data = data.merge(flatten_columns(spy), left_index=True, right_index=True, how="left")
 
         for etf in sector_etfs:
-            data = data.merge(sector_data[etf], left_index=True, right_index=True, how="left")
+            data = flatten_columns(data)
+            etf_features = flatten_columns(sector_data[etf])
+            data = data.merge(etf_features, left_index=True, right_index=True, how="left")
 
 
         # ----------------------------
@@ -527,7 +542,7 @@ def run_experiment(config, progress_callback=None):
     .rank(ascending=False, method="first")
     .astype(int)
     )
-    
+
     predictions_df = test_data.reset_index().copy()
 
     if "Date" in predictions_df.columns:
@@ -752,8 +767,12 @@ def run_experiment(config, progress_callback=None):
     spy_for_benchmark = spy_for_benchmark.loc[portfolio_history_df["date"].min():portfolio_history_df["date"].max()].copy()
     spy_for_benchmark["spy_return"] = spy_for_benchmark["Close"].pct_change().fillna(0)
     spy_for_benchmark["spy_equity"] = initial_capital * (1 + spy_for_benchmark["spy_return"]).cumprod()
-
-    spy_benchmark_df = spy_for_benchmark.reset_index().rename(columns={"Date": "date"})[["date", "Close", "spy_equity"]]
+    
+    spy_benchmark_df = spy_for_benchmark.reset_index().copy()
+    spy_benchmark_df = flatten_columns(spy_benchmark_df)
+    spy_date_col = spy_benchmark_df.columns[0]
+    spy_benchmark_df = spy_benchmark_df.rename(columns={spy_date_col: "date"})
+    spy_benchmark_df = spy_benchmark_df[["date", "Close", "spy_equity"]]
 
     print(spy_benchmark_df.head())
 
@@ -810,7 +829,10 @@ def run_experiment(config, progress_callback=None):
             "portfolio_weight": float(pos["value"] / final_portfolio_value) if final_portfolio_value > 0 else 0.0
         })
 
-    holdings_df = pd.DataFrame(holdings_rows).sort_values("position_value", ascending=False)
+    holdings_df = pd.DataFrame(holdings_rows)
+    if not holdings_df.empty and "position_value" in holdings_df.columns:
+        holdings_df = holdings_df.sort_values("position_value", ascending=False)
+
     metrics = {
         "baseline_test_accuracy": float(baseline_acc.numpy()),
         "test_accuracy": float(test_acc.numpy()),
