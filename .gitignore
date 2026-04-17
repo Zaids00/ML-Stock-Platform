@@ -1,6 +1,5 @@
 DissertationEnv/
 __pycache__/
 *.pyc
-.streamlit/
 Ignore/
 .venv/
